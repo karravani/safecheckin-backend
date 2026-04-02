@@ -259,12 +259,20 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
 
 app.use(
   cors({
-    origin: allowedOrigins,
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true); // allow Postman / mobile
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      } else {
+        return callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
+
+app.options("*", cors()); // ✅ important
 
 // Simple request logging
 app.use((req, res, next) => {
