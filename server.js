@@ -8,28 +8,6 @@ const fs = require("fs");
 
 // Load environment variables
 dotenv.config();
-/* ─────────────────────────────  CORS & BASIC MIDDLEWARE  ───────────────────────────── */
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(",")
-  : [];
-
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin) return callback(null, true);
-
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      } else {
-        console.log("❌ Blocked by CORS:", origin);
-        return callback(new Error("Not allowed by CORS"));
-      }
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  }),
-);
 
 // Check for optional middleware
 const securityMiddleware = fs.existsSync("./middleware/security.js")
@@ -68,6 +46,29 @@ const PORT = process.env.PORT || 5000;
 
 /* ────────────────────────────  SERVER SETUP  ───────────────────────────── */
 const server = require("http").createServer(app);
+
+/* ─────────────────────────────  CORS & BASIC MIDDLEWARE  ───────────────────────────── */
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",")
+  : [];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      } else {
+        console.log("❌ Blocked by CORS:", origin);
+        return callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }),
+);
 
 // ========== INCREASED TIMEOUTS FOR FILE UPLOADS ========== //
 app.use("/api/guests/checkin", (req, res, next) => {
