@@ -16,6 +16,8 @@ const {
   verifyHotel,
   updateVerificationStatus,
 } = require("../controllers/hotelAuthController");
+const { getHotelById } = require("../controllers/hotelAuthController");
+
 const { auth, rateLimiter } = require("../middleware/auth");
 
 // Public routes (no authentication required)
@@ -30,18 +32,19 @@ router.post(
       next();
     }
   },
-  registerHotel
+  registerHotel,
 );
 
 // Public route to get all hotels (with optional filtering)
 router.get("/all", getAllHotels);
 
 // Police-only routes (before hotel auth middleware)
+router.get("/:hotelId", authenticatePolice, getHotelById);
 router.post("/verify/:hotelId", authenticatePolice, verifyHotel);
 router.patch(
   "/:hotelId/verification-status",
   authenticatePolice,
-  updateVerificationStatus
+  updateVerificationStatus,
 );
 
 // NEW: Add owner info update route
@@ -113,7 +116,7 @@ router.patch("/:hotelId/owner-info", authenticatePolice, async (req, res) => {
           previousOwnerPhone,
           newOwnerPhone: ownerPhone,
         },
-        req
+        req,
       );
     } catch (logError) {
       console.error("❌ Failed to log owner update activity:", logError);
@@ -147,11 +150,11 @@ router.get(
       const Hotel = require("../models/Hotel");
       const hotel = await Hotel.findById(req.params.hotelId)
         .select(
-          "name verificationHistory verificationStatus isVerified verifiedAt verificationNotes"
+          "name verificationHistory verificationStatus isVerified verifiedAt verificationNotes",
         )
         .populate(
           "verificationHistory.changedBy",
-          "name badgeNumber station rank"
+          "name badgeNumber station rank",
         );
 
       if (!hotel) {
@@ -182,7 +185,7 @@ router.get(
         error: "Failed to fetch verification history",
       });
     }
-  }
+  },
 );
 
 // Protected routes (hotel authentication required)
@@ -206,12 +209,12 @@ router.get("/verification/status", async (req, res) => {
     const Hotel = require("../models/Hotel");
     const hotel = await Hotel.findById(req.hotelId)
       .select(
-        "verificationStatus isVerified verifiedAt verificationNotes verificationHistory"
+        "verificationStatus isVerified verifiedAt verificationNotes verificationHistory",
       )
       .populate("verifiedBy", "name badgeNumber station rank")
       .populate(
         "verificationHistory.changedBy",
-        "name badgeNumber station rank"
+        "name badgeNumber station rank",
       );
 
     if (!hotel) {

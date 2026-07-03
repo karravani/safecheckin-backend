@@ -1,4 +1,4 @@
-// controllers/hotelAuthController.js - UPDATED to match new schema
+// controllers/hotelAuthController.js - FIXED: location now actually saved on registration
 const Hotel = require("../models/Hotel");
 const { logActivity } = require("./activityController");
 const bcrypt = require("bcryptjs");
@@ -33,6 +33,8 @@ const registerHotel = async (req, res) => {
       policeOfficerInfo,
       verificationStatus,
       verificationNotes,
+      location, // ⭐ FIXED — this was never destructured before, so it
+      //    silently fell back to the schema default [0,0] every time.
     } = req.body;
 
     console.log("📝 Registration request received:", {
@@ -47,6 +49,7 @@ const registerHotel = async (req, res) => {
       labourLicenceNumber,
       hotelLicenceNumber,
       verificationStatus,
+      location, // ⭐ log it so you can confirm coordinates are arriving correctly
     });
 
     // Validate required fields
@@ -151,9 +154,8 @@ const registerHotel = async (req, res) => {
     } else if (policeOfficerId) {
       try {
         const Police = require("../models/Police");
-        const policeOfficer = await Police.findById(policeOfficerId).select(
-          "-password"
-        );
+        const policeOfficer =
+          await Police.findById(policeOfficerId).select("-password");
         if (policeOfficer) {
           actualPoliceOfficerId = policeOfficerId;
           policeOfficerData = {
@@ -178,6 +180,27 @@ const registerHotel = async (req, res) => {
     const finalVerificationStatus = verificationStatus || "pending";
     const isVerified = finalVerificationStatus === "verified";
 
+    // ⭐ FIXED — validate and build the location object.
+    // Only use what the client sent if it's actually a valid [lng, lat] pair;
+    // otherwise omit it entirely and let the schema default ([0,0]) apply.
+    let locationData = undefined;
+    if (
+      location &&
+      Array.isArray(location.coordinates) &&
+      location.coordinates.length === 2 &&
+      typeof location.coordinates[0] === "number" &&
+      typeof location.coordinates[1] === "number"
+    ) {
+      locationData = {
+        type: "Point",
+        coordinates: location.coordinates, // [longitude, latitude]
+      };
+    } else {
+      console.log(
+        "⚠️  No valid GPS coordinates provided — hotel will default to [0,0] and won't appear on the jurisdiction map until updated.",
+      );
+    }
+
     const hotel = new Hotel({
       name: name.trim(),
       accommodationType: accommodationType || "Hotel",
@@ -195,6 +218,7 @@ const registerHotel = async (req, res) => {
         country: address.country || "India",
         fullAddress: fullAddress,
       },
+      location: locationData, // ⭐ FIXED — this line was missing entirely before
       gstNumber: gstNumber.toUpperCase().trim(),
       labourLicenceNumber: labourLicenceNumber.trim(),
       hotelLicenceNumber: hotelLicenceNumber.trim(),
@@ -228,7 +252,9 @@ const registerHotel = async (req, res) => {
     });
 
     await hotel.save();
-    console.log("✅ Hotel saved successfully:", hotel.name);
+    console.log(
+      `✅ Hotel saved successfully: ${hotel.name} — location: [${hotel.location.coordinates}]`,
+    );
 
     // Log activity if registered by police
     if (actualPoliceOfficerId) {
@@ -249,10 +275,10 @@ const registerHotel = async (req, res) => {
             registeredBy: policeOfficerData?.name || "Police Officer",
             registrationMethod: "police_portal",
           },
-          req
+          req,
         );
         console.log(
-          `✅ Activity logged: hotel_registered by ${policeOfficerData?.name}`
+          `✅ Activity logged: hotel_registered by ${policeOfficerData?.name}`,
         );
       } catch (logError) {
         console.error("❌ Failed to log activity:", logError);
@@ -273,6 +299,7 @@ const registerHotel = async (req, res) => {
         ownerPhone: hotel.ownerPhone,
         numberOfRooms: hotel.numberOfRooms,
         address: hotel.address,
+        location: hotel.location, // ⭐ included in response so frontend can confirm
         gstNumber: hotel.gstNumber,
         labourLicenceNumber: hotel.labourLicenceNumber,
         hotelLicenceNumber: hotel.hotelLicenceNumber,
@@ -392,10 +419,10 @@ const updateVerificationStatus = async (req, res) => {
           previousIsVerified: previousIsVerified,
           newIsVerified: hotel.isVerified,
         },
-        req
+        req,
       );
       console.log(
-        `✅ Hotel verification status updated: ${hotel.name} changed to ${verificationStatus} by ${req.user.name}`
+        `✅ Hotel verification status updated: ${hotel.name} changed to ${verificationStatus} by ${req.user.name}`,
       );
     } catch (logError) {
       console.error("❌ Failed to log verification update activity:", logError);
@@ -496,7 +523,7 @@ const updateHotelProfile = async (req, res) => {
           },
           newData: updateData,
         },
-        req
+        req,
       );
     }
 
@@ -704,10 +731,10 @@ const verifyHotel = async (req, res) => {
           previousStatus: previousStatus,
           newStatus: "verified",
         },
-        req
+        req,
       );
       console.log(
-        `✅ Hotel verification logged: ${hotel.name} verified by ${req.user.name}`
+        `✅ Hotel verification logged: ${hotel.name} verified by ${req.user.name}`,
       );
     } catch (logError) {
       console.error("❌ Failed to log verification activity:", logError);
@@ -752,7 +779,7 @@ const changePassword = async (req, res) => {
 
     const isCurrentPasswordValid = await bcrypt.compare(
       currentPassword,
-      hotel.password
+      hotel.password,
     );
     if (!isCurrentPasswordValid) {
       return res.status(400).json({
@@ -860,7 +887,7 @@ const getHotelStats = async (req, res) => {
         pendingAlerts,
         totalRevenue: totalRevenue[0]?.total || 0,
         occupancyRate: Math.round(
-          (activeGuests / req.hotel.numberOfRooms) * 100
+          (activeGuests / req.hotel.numberOfRooms) * 100,
         ),
       },
     });
@@ -1021,6 +1048,35 @@ const getAllHotels = async (req, res) => {
   }
 };
 
+const getHotelById = async (req, res) => {
+  try {
+    const { hotelId } = req.params;
+
+    const hotel = await Hotel.findById(hotelId)
+      .select("-password")
+      .populate("verifiedBy", "name badgeNumber station rank")
+      .populate("registeredBy", "name badgeNumber station rank");
+
+    if (!hotel) {
+      return res.status(404).json({
+        success: false,
+        error: "Hotel not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      data: { hotel },
+    });
+  } catch (error) {
+    console.error("Get hotel by ID error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch hotel details",
+    });
+  }
+};
+
 module.exports = {
   registerHotel,
   loginHotel,
@@ -1034,3 +1090,4 @@ module.exports = {
   verifyHotel,
   updateVerificationStatus,
 };
+module.exports.getHotelById = getHotelById;

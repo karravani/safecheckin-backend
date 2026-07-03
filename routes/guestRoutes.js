@@ -19,6 +19,8 @@ const {
   getGuestByRoom,
   getAllGuestsByRoom,
   checkOutGuest,
+  updateGuestDetails,
+  extendGuestStay,
   updateGuest,
   getPhoto,
   getPhotoByPath,
@@ -95,7 +97,7 @@ const validatePhotos = (req, res, next) => {
   console.log("=== Validating Photos ===");
   console.log(
     "Files received:",
-    req.files ? Object.keys(req.files) : "No files"
+    req.files ? Object.keys(req.files) : "No files",
   );
 
   if (
@@ -203,7 +205,7 @@ const checkInValidation = [
 
     if (sum !== total) {
       throw new Error(
-        `Guest count mismatch: total (${total}) should equal sum of male (${maleGuests}), female (${femaleGuests}), and child (${childGuests}) guests`
+        `Guest count mismatch: total (${total}) should equal sum of male (${maleGuests}), female (${femaleGuests}), and child (${childGuests}) guests`,
       );
     }
     return true;
@@ -295,7 +297,7 @@ router.post(
   checkInValidation, // Validate form data
   validateGuestsArray, // Validate guests array
   validatePhotos, // Ensure photos exist
-  checkInGuest // Save to database and respond
+  checkInGuest, // Save to database and respond
 );
 
 // FIXED: Photo serving route that matches the URL structure
@@ -395,6 +397,8 @@ router.get("/", getAllGuests);
 
 // Dynamic routes
 router.get("/:id", getGuestById);
+router.patch("/:id/extend-stay", extendGuestStay);
+router.patch("/:id/update-details", updateGuestDetails);
 router.put("/:id/checkout", checkOutValidation, checkOutGuest);
 router.put("/:id", updateValidation, updateGuest);
 

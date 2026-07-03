@@ -19,6 +19,10 @@ const {
   requireAdminPolice,
   requireAnyPolice,
 } = require("../middleware/policeAuth");
+// ⭐ NEW
+const {
+  getJurisdictionMapData,
+} = require("../controllers/jurisdictionController");
 
 // Public routes (no authentication required)
 router.post("/login", loginPolice);
@@ -36,6 +40,10 @@ router.post("/change-password", requireAnyPolice, changePolicePassword);
 router.post("/refresh-token", requireAnyPolice, refreshPoliceToken);
 router.post("/logout", requireAnyPolice, logoutPolice);
 
+// ⭐ NEW: Jurisdiction map data — any police role.
+// Admin sees their own jurisdiction; sub-police sees their managing admin's.
+router.get("/jurisdiction/map-data", requireAnyPolice, getJurisdictionMapData);
+
 // Admin police only routes
 router.get("/all", requireAdminPolice, getAllPoliceOfficers);
 router.get("/sub-police", requireAdminPolice, getSubPoliceOfficers);
@@ -43,7 +51,7 @@ router.get("/officer/:officerId", requireAdminPolice, getOfficerById);
 router.patch(
   "/officer/:officerId/status",
   requireAdminPolice,
-  updateOfficerStatus
+  updateOfficerStatus,
 );
 
 // Health check for authenticated police

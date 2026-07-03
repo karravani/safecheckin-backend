@@ -58,7 +58,8 @@ const evidenceSchema = new mongoose.Schema(
     files: [
       {
         fileName: String,
-        fileUrl: String,
+        fileData: String, // Base64-encoded file bytes, stored directly in MongoDB
+        fileUrl: String, // Legacy disk path - kept for old records, no longer written
         fileSize: Number,
         mimeType: String,
         duration: Number,
@@ -170,7 +171,7 @@ const evidenceSchema = new mongoose.Schema(
     isDeleted: { type: Boolean, default: false, index: true },
     deletedAt: Date,
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // ========== INDEXES ========== //
@@ -254,7 +255,7 @@ evidenceSchema.statics.softDelete = async function (evidenceId, userId) {
         },
       },
     },
-    { new: true }
+    { new: true },
   );
 };
 

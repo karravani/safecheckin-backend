@@ -2,7 +2,8 @@ const mongoose = require("mongoose");
 
 // INSTANT file storage schema - stores paths instead of GridFS IDs
 const photoSchema = {
-  path: { type: String }, // Relative path to file on disk
+  data: { type: String }, // ⭐ NEW: base64-encoded file content, stored in Mongo
+  path: { type: String }, // Legacy: relative path to file on disk (old records only)
   filename: { type: String }, // Generated filename on disk
   originalName: { type: String }, // Original uploaded filename
   size: { type: Number }, // File size in bytes
@@ -348,7 +349,7 @@ const guestSchema = new mongoose.Schema(
   {
     timestamps: true,
     versionKey: false,
-  }
+  },
 );
 
 // PERFORMANCE OPTIMIZED INDEXES
@@ -370,8 +371,8 @@ guestSchema.pre("save", function (next) {
   if (totalIndividual > 0 && totalIndividual !== this.guestCount) {
     return next(
       new Error(
-        `Guest count mismatch: total (${this.guestCount}) should equal sum of male (${this.maleGuests}), female (${this.femaleGuests}), and child (${this.childGuests}) guests`
-      )
+        `Guest count mismatch: total (${this.guestCount}) should equal sum of male (${this.maleGuests}), female (${this.femaleGuests}), and child (${this.childGuests}) guests`,
+      ),
     );
   }
 
@@ -445,12 +446,20 @@ guestSchema.methods.getPrimaryGuest = function () {
 
 // Get photo URL for frontend
 guestSchema.methods.getPhotoUrl = function (photoType) {
-  if (this.photos && this.photos[photoType] && this.photos[photoType].path) {
-    return `/api/guests/photo/${this.hotelId}/${photoType}/${this.photos[photoType].filename}`;
+  const photo = this.photos && this.photos[photoType];
+  if (!photo) return null;
+
+  // ⭐ NEW: served from the guestController route which reads base64 from Mongo
+  // (matches the existing "/guest/:guestId/photo/:photoType" route in guestRoutes.js)
+  if (photo.data) {
+    return `/api/guests/guest/${this._id}/photo/${photoType}`;
+  }
+  // Legacy fallback for guests checked in before this change
+  if (photo.path) {
+    return `/api/guests/photo/${this.hotelId}/${photoType}/${photo.filename}`;
   }
   return null;
 };
-
 // STATIC METHODS - Enhanced for hotel management
 guestSchema.statics.findByHotel = function (hotelId, status = null) {
   const query = { hotelId };
@@ -464,7 +473,7 @@ guestSchema.statics.findByHotel = function (hotelId, status = null) {
 guestSchema.statics.findByRoom = function (
   hotelId,
   roomNumber,
-  status = "checked-in"
+  status = "checked-in",
 ) {
   return this.find({ hotelId, roomNumber, status });
 };

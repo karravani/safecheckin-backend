@@ -45,6 +45,27 @@ const policeSchema = new mongoose.Schema(
       ref: "Police",
       default: null,
     },
+    jurisdiction: {
+      center: {
+        type: {
+          type: String,
+          enum: ["Point"],
+          default: "Point",
+        },
+        coordinates: {
+          type: [Number], // [longitude, latitude]
+          default: [0, 0],
+        },
+      },
+      radiusKm: {
+        type: Number,
+        default: 10,
+      },
+      areaName: {
+        type: String,
+        default: null, // human-readable label e.g. "Hyderabad Central Zone"
+      },
+    },
     permissions: {
       canManageHotels: { type: Boolean, default: true },
       canManageSuspects: { type: Boolean, default: true },
@@ -92,7 +113,7 @@ const policeSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Enhanced indexes
@@ -100,6 +121,10 @@ policeSchema.index({ role: 1, isActive: 1 });
 policeSchema.index({ managedBy: 1 });
 policeSchema.index({ station: 1, department: 1 });
 policeSchema.index({ lastActivityAt: -1 });
+
+// ⭐ NEW: Geospatial index for jurisdiction matching
+// (used later to find which admin's jurisdiction a hotel's coordinates fall into)
+policeSchema.index({ "jurisdiction.center": "2dsphere" });
 
 // Virtual for activity stats
 policeSchema.virtual("recentActivityCount").get(function () {

@@ -31,6 +31,8 @@ const activityRoutes = require("./routes/activityRoutes");
 const suspectRoutes = require("./routes/suspectRoutes");
 const hotelSuspectRoutes = require("./routes/hotelSuspectRoutes");
 
+// ⭐ ADD THIS LINE HERE (after hotelSuspectRoutes, before evidence check)
+const { createProxyMiddleware } = require("http-proxy-middleware");
 // ⭐ NEW: Evidence routes
 const evidenceRoutes = fs.existsSync("./routes/evidenceRoutes.js")
   ? require("./routes/evidenceRoutes")
@@ -70,7 +72,31 @@ app.use(
   }),
 );
 
+app.use(
+  "/api/agent",
+  createProxyMiddleware({
+    target: "http://localhost:8000",
+    changeOrigin: true,
+    pathRewrite: { "^/api/agent": "" },
+    on: {
+      error: (err, req, res) => {
+        console.error("[SafeAI Proxy] Error:", err.message);
+        if (!res.headersSent) {
+          res.status(503).json({
+            error: "AI service unavailable",
+            message: "Ensure the Python AI service is running on port 8000",
+          });
+        }
+      },
+    },
+  }),
+);
+
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
 // ========== INCREASED TIMEOUTS FOR FILE UPLOADS ========== //
+
 app.use("/api/guests/checkin", (req, res, next) => {
   req.setTimeout(300000); // 5 minutes
   res.setTimeout(300000);
@@ -330,6 +356,8 @@ mongoose.set("bufferCommands", false);
 
 /* ──────────────────────────────  ROUTES  ─────────────────────────────── */
 
+const { startAutoCheckoutJob } = require("./jobs/autoCheckout");
+startAutoCheckoutJob();
 // Health check route
 app.get("/", (_req, res) => {
   res.json({

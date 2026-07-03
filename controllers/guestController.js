@@ -55,7 +55,7 @@ const checkInGuest = async (req, res) => {
     const existingGuest = await Guest.checkUniqueness(
       hotelId,
       req.body.phone,
-      firstGuestId
+      firstGuestId,
     );
 
     if (existingGuest) {
@@ -118,7 +118,7 @@ const checkInGuest = async (req, res) => {
     const processingTime = Date.now() - startTime;
     console.log(
       `✅ Guest saved to database in ${processingTime}ms with ID:`,
-      guest._id
+      guest._id,
     );
 
     // Log guest check-in activity
@@ -144,7 +144,7 @@ const checkInGuest = async (req, res) => {
         photos: photoInfo,
         processingTimeMs: processingTime,
       },
-      req
+      req,
     );
 
     // Check if guest should be flagged
@@ -165,7 +165,7 @@ const checkInGuest = async (req, res) => {
           hotelName: hotel.name,
           autoFlagged: true,
         },
-        req
+        req,
       );
     }
 
@@ -226,7 +226,7 @@ const getPhoto = async (req, res) => {
 
     // Get photo info
     const photoInfo = guest.photos?.[photoType];
-    if (!photoInfo || !photoInfo.path) {
+    if (!photoInfo || (!photoInfo.data && !photoInfo.path)) {
       console.log("❌ Photo not found for type:", photoType);
       return res.status(404).json({
         success: false,
@@ -234,12 +234,28 @@ const getPhoto = async (req, res) => {
       });
     }
 
-    // Construct full file path
+    // ⭐ NEW: serve straight from base64 stored in Mongo
+    if (photoInfo.data) {
+      console.log("✅ Serving base64 photo from Mongo:", photoType);
+
+      const mimeType = photoInfo.mimeType || "image/jpeg";
+      const buffer = Buffer.from(photoInfo.data, "base64");
+
+      res.setHeader("Content-Type", mimeType);
+      res.setHeader("Cache-Control", "public, max-age=31536000");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="${photoInfo.filename || photoType}"`,
+      );
+
+      return res.send(buffer);
+    }
+
+    // Legacy fallback: old guests still have a disk path
     const filePath = path.join(__dirname, "..", photoInfo.path);
 
-    console.log("📁 Looking for file at:", filePath);
+    console.log("📁 Looking for legacy file at:", filePath);
 
-    // Check if file exists
     try {
       await fs.access(filePath);
     } catch {
@@ -252,7 +268,6 @@ const getPhoto = async (req, res) => {
 
     console.log("✅ File found, serving:", photoInfo.filename);
 
-    // Serve the file
     const ext = path.extname(photoInfo.filename || "").toLowerCase();
     const mimeTypes = {
       ".jpg": "image/jpeg",
@@ -267,7 +282,7 @@ const getPhoto = async (req, res) => {
     res.setHeader("Cache-Control", "public, max-age=31536000");
     res.setHeader(
       "Content-Disposition",
-      `inline; filename="${photoInfo.filename}"`
+      `inline; filename="${photoInfo.filename}"`,
     );
 
     res.sendFile(filePath);
@@ -357,7 +372,7 @@ const cleanupUploadedFiles = async (files) => {
       } catch (deleteError) {
         console.warn(
           `Could not delete file ${file.filename}:`,
-          deleteError.message
+          deleteError.message,
         );
       }
     }
@@ -445,7 +460,7 @@ const checkOutGuest = async (req, res) => {
         previousStatus,
         action: "check_out",
       },
-      req
+      req,
     );
 
     try {
@@ -533,7 +548,7 @@ const updateGuest = async (req, res) => {
           previousData,
           newData: req.body,
         },
-        req
+        req,
       );
     }
 
@@ -590,7 +605,7 @@ const getGuestById = async (req, res) => {
           hotelName: hotel?.name,
           viewedBy: req.user.name || "Police Officer",
         },
-        req
+        req,
       );
     }
 
@@ -655,7 +670,7 @@ const getAllGuests = async (req, res) => {
       } catch (populateError) {
         console.warn(
           `Population failed for guest ${guest._id}:`,
-          populateError
+          populateError,
         );
         populatedGuests.push(guest);
       }
@@ -790,7 +805,7 @@ const getAllGuestsByRoom = async (req, res) => {
       } catch (populateError) {
         console.warn(
           `Population failed for guest ${guest._id}:`,
-          populateError
+          populateError,
         );
       }
     }
@@ -819,6 +834,199 @@ const getAllGuestsByRoom = async (req, res) => {
   }
 };
 
+// ── updateGuestDetails ───────────────────────────────────────────────────────
+// PATCH /api/guests/:id/update-details
+// Editable fields: totalAmount, advanceAmount, paymentMethod,
+//                  guestCount, maleGuests, femaleGuests, childGuests
+// NOT editable: name, phone, nationality, roomNumber, Aadhaar, purpose
+const updateGuestDetails = async (req, res) => {
+  try {
+    const hotelId = req.user.hotelId;
+    const { id } = req.params;
+    const {
+      totalAmount,
+      advanceAmount,
+      paymentMethod,
+      guestCount,
+      maleGuests,
+      femaleGuests,
+      childGuests,
+    } = req.body;
+
+    const guest = await Guest.findOne({ _id: id, hotelId });
+    if (!guest) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Guest not found" });
+    }
+
+    // Apply updates
+    if (totalAmount !== undefined) guest.totalAmount = Number(totalAmount);
+    if (advanceAmount !== undefined)
+      guest.advanceAmount = Number(advanceAmount);
+    if (paymentMethod) guest.paymentMethod = paymentMethod;
+    if (guestCount !== undefined) guest.guestCount = Number(guestCount);
+    if (maleGuests !== undefined) guest.maleGuests = Number(maleGuests);
+    if (femaleGuests !== undefined) guest.femaleGuests = Number(femaleGuests);
+    if (childGuests !== undefined) guest.childGuests = Number(childGuests);
+
+    // Recalculate derived fields
+    const total = guest.totalAmount || 0;
+    const advance = guest.advanceAmount || 0;
+    guest.balanceAmount = Math.max(0, total - advance);
+    guest.paymentStatus =
+      total === 0
+        ? "Pending"
+        : advance >= total
+          ? "Paid"
+          : advance > 0
+            ? "Partial"
+            : "Pending";
+
+    await guest.save();
+
+    const Hotel = require("../models/Hotel");
+    const hotel = await Hotel.findById(hotelId).select("name").lean();
+
+    await logActivity(
+      req.user.policeId || req.user.id,
+      "guest_updated",
+      "guest",
+      guest._id,
+      {
+        guestName: guest.name,
+        roomNumber: guest.roomNumber,
+        hotelName: hotel?.name || "Unknown",
+        updatedFields: {
+          totalAmount,
+          advanceAmount,
+          paymentMethod,
+          guestCount,
+          maleGuests,
+          femaleGuests,
+          childGuests,
+        },
+        newPaymentStatus: guest.paymentStatus,
+      },
+      req,
+    );
+
+    res.json({
+      success: true,
+      message: "Guest details updated successfully",
+      data: {
+        totalAmount: guest.totalAmount,
+        advanceAmount: guest.advanceAmount,
+        balanceAmount: guest.balanceAmount,
+        paymentStatus: guest.paymentStatus,
+        paymentMethod: guest.paymentMethod,
+        guestCount: guest.guestCount,
+        maleGuests: guest.maleGuests,
+        femaleGuests: guest.femaleGuests,
+        childGuests: guest.childGuests,
+      },
+    });
+  } catch (error) {
+    console.error("Error in updateGuestDetails:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update guest details",
+      error: error.message,
+    });
+  }
+};
+
+// ── extendGuestStay ───────────────────────────────────────────────────────────
+// PATCH /api/guests/:id/extend-stay
+// Can be called unlimited times — each call sets a new checkout date.
+// The only constraint: new date must be in the future (not after existing date).
+const extendGuestStay = async (req, res) => {
+  try {
+    const hotelId = req.user.hotelId;
+    const { id } = req.params;
+    const { newCheckOutDate, reason } = req.body;
+
+    if (!newCheckOutDate) {
+      return res
+        .status(400)
+        .json({ success: false, message: "newCheckOutDate is required" });
+    }
+    const newDate = new Date(newCheckOutDate);
+    if (isNaN(newDate.getTime())) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid date format" });
+    }
+    if (newDate <= new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: "New checkout date must be in the future",
+      });
+    }
+
+    const guest = await Guest.findOne({ _id: id, hotelId });
+    if (!guest)
+      return res
+        .status(404)
+        .json({ success: false, message: "Guest not found" });
+
+    if (guest.status !== "checked-in") {
+      return res.status(400).json({
+        success: false,
+        message: `Stay can only be extended for checked-in guests. Current status: ${guest.status}`,
+      });
+    }
+
+    const previousCheckOutDate = guest.checkOutDate;
+    guest.checkOutDate = newDate;
+
+    const note =
+      `[Extension] Checkout → ${newDate.toLocaleDateString("en-IN")}` +
+      (reason ? ` — ${reason}` : "") +
+      ` (prev: ${previousCheckOutDate ? previousCheckOutDate.toLocaleDateString("en-IN") : "none"})`;
+    guest.notes = guest.notes ? `${guest.notes}\n${note}` : note;
+
+    await guest.save();
+
+    const Hotel = require("../models/Hotel");
+    const hotel = await Hotel.findById(hotelId).select("name").lean();
+
+    await logActivity(
+      req.user.policeId || req.user.id,
+      "guest_updated",
+      "guest",
+      guest._id,
+      {
+        guestName: guest.name,
+        roomNumber: guest.roomNumber,
+        hotelName: hotel?.name || "Unknown",
+        action: "stay_extension",
+        previousCheckOutDate: previousCheckOutDate?.toISOString() || null,
+        newCheckOutDate: newDate.toISOString(),
+        reason: reason || "No reason provided",
+      },
+      req,
+    );
+
+    res.json({
+      success: true,
+      message: `Stay extended to ${newDate.toLocaleDateString("en-IN")}`,
+      data: {
+        guestId: guest._id,
+        newCheckOutDate: newDate,
+        status: guest.status,
+      },
+    });
+  } catch (error) {
+    console.error("Error in extendGuestStay:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error extending guest stay",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   checkInGuest,
   getAllGuests,
@@ -830,4 +1038,6 @@ module.exports = {
   updateGuest,
   getPhoto,
   getPhotoByPath,
+  updateGuestDetails,
+  extendGuestStay,
 };

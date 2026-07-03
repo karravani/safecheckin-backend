@@ -3,8 +3,6 @@ const Evidence = require("../models/Evidence");
 const Guest = require("../models/Guest");
 const Alert = require("../models/Alert");
 const multer = require("multer");
-const path = require("path");
-const fs = require("fs").promises;
 
 // Check if activityController exists
 let logActivity;
@@ -16,28 +14,9 @@ try {
 }
 
 // ========== FILE UPLOAD CONFIG ========== //
-const storage = multer.diskStorage({
-  destination: async (req, file, cb) => {
-    const { suspectId, hotelId } = req.body;
-    const uploadDir = path.join(
-      __dirname,
-      `../uploads/evidence/${hotelId}/${suspectId}`
-    );
-
-    try {
-      await fs.mkdir(uploadDir, { recursive: true });
-      cb(null, uploadDir);
-    } catch (err) {
-      cb(err);
-    }
-  },
-  filename: (req, file, cb) => {
-    const uniqueName = `${Date.now()}-${Math.random()
-      .toString(36)
-      .substr(2, 9)}${path.extname(file.originalname)}`;
-    cb(null, uniqueName);
-  },
-});
+// Memory storage: files land in req.files[i].buffer instead of on disk, so
+// they survive redeploys once we persist that buffer as base64 in Mongo below.
+const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
   const allowedTypes = [
@@ -63,7 +42,12 @@ const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB
+    // MongoDB caps a single document at 16MB, and base64 encoding inflates
+    // the raw file size by ~33%. 8MB raw keeps every file (plus the rest of
+    // the evidence document) safely under that ceiling. If you need to store
+    // larger files (e.g. long CCTV clips), switch those to GridFS instead -
+    // base64-in-document only makes sense for photos/short clips.
+    fileSize: 8 * 1024 * 1024, // 8MB
   },
 });
 
@@ -112,7 +96,7 @@ const uploadEvidence = async (req, res) => {
       incidentDate: incidentDate ? new Date(incidentDate) : new Date(),
       files: req.files.map((file) => ({
         fileName: file.originalname,
-        fileUrl: `/uploads/evidence/${hotelId}/${suspectId}/${file.filename}`,
+        fileData: file.buffer.toString("base64"),
         fileSize: file.size,
         mimeType: file.mimetype,
         uploadedBy: {
@@ -192,7 +176,7 @@ const uploadEvidence = async (req, res) => {
         autoShared: true,
         uploadedBy: req.user?.name || "Hotel Staff",
       },
-      req
+      req,
     );
 
     res.status(201).json({
@@ -240,7 +224,7 @@ const getEvidenceBySuspect = async (req, res) => {
           role: req.user.role,
           viewedBy: req.user.name,
         },
-        req
+        req,
       );
     }
 
@@ -263,7 +247,6 @@ const getEvidenceBySuspect = async (req, res) => {
   }
 };
 
-// ========== GET SHARED EVIDENCE FOR POLICE ========== //
 // ========== GET SHARED EVIDENCE FOR POLICE ========== //
 const getSharedEvidence = async (req, res) => {
   try {
@@ -301,14 +284,14 @@ const getSharedEvidence = async (req, res) => {
     ]);
 
     console.log(
-      `✅ Found ${evidence.length} evidence items for suspect ${suspectId}`
+      `✅ Found ${evidence.length} evidence items for suspect ${suspectId}`,
     );
 
     // Update view count
     if (evidence.length > 0) {
       await Evidence.updateMany(
         { _id: { $in: evidence.map((e) => e._id) } },
-        { $inc: { viewCount: 1 } }
+        { $inc: { viewCount: 1 } },
       );
     }
 
@@ -325,7 +308,7 @@ const getSharedEvidence = async (req, res) => {
           sharedEvidence: true,
           viewedBy: req.user.name,
         },
-        req
+        req,
       );
     }
 
@@ -397,7 +380,7 @@ const approveEvidence = async (req, res) => {
         notes,
         suspectId: evidence.suspectId,
       },
-      req
+      req,
     );
 
     res.json({
@@ -465,7 +448,7 @@ const rejectEvidence = async (req, res) => {
         reason,
         suspectId: evidence.suspectId,
       },
-      req
+      req,
     );
 
     res.json({
@@ -496,17 +479,8 @@ const deleteEvidence = async (req, res) => {
       });
     }
 
-    // Delete files from disk
-    for (const file of evidence.files) {
-      try {
-        const filePath = path.join(__dirname, `..${file.fileUrl}`);
-        await fs.unlink(filePath);
-        console.log("🗑️ Deleted file:", filePath);
-      } catch (err) {
-        console.warn("⚠️ File not found:", file.fileUrl);
-      }
-    }
-
+    // Files live inside the document itself (base64) now, so soft-deleting
+    // the Evidence record is all that's needed - no disk cleanup required.
     await Evidence.softDelete(evidenceId, req.user?._id || req.user?.id);
 
     // ✅ Log evidence deletion
@@ -521,7 +495,7 @@ const deleteEvidence = async (req, res) => {
         filesDeleted: evidence.files.length,
         suspectId: evidence.suspectId,
       },
-      req
+      req,
     );
 
     res.json({
@@ -552,21 +526,10 @@ const downloadFile = async (req, res) => {
     }
 
     const file = evidence.files[parseInt(fileIndex)];
-    if (!file) {
+    if (!file || !file.fileData) {
       return res.status(404).json({
         success: false,
         error: "File not found",
-      });
-    }
-
-    const filePath = path.join(__dirname, `..${file.fileUrl}`);
-
-    try {
-      await fs.access(filePath);
-    } catch (err) {
-      return res.status(404).json({
-        success: false,
-        error: "File not found on server",
       });
     }
 
@@ -576,7 +539,7 @@ const downloadFile = async (req, res) => {
         (share.userId?.toString() === userId?.toString() ||
           share.role === "Police" ||
           share.role === "All") &&
-        ["Download", "Edit", "View"].includes(share.accessLevel)
+        ["Download", "Edit", "View"].includes(share.accessLevel),
     );
 
     if (!hasAccess) {
@@ -602,10 +565,16 @@ const downloadFile = async (req, res) => {
         downloadedBy: req.user?.name,
         suspectId: evidence.suspectId,
       },
-      req
+      req,
     );
 
-    res.download(filePath, file.fileName);
+    const buffer = Buffer.from(file.fileData, "base64");
+    res.setHeader("Content-Type", file.mimeType || "application/octet-stream");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${file.fileName}"`,
+    );
+    res.send(buffer);
   } catch (error) {
     console.error("Download file error:", error);
     res.status(500).json({
@@ -682,7 +651,7 @@ const shareEvidence = async (req, res) => {
     }
 
     const alreadyShared = evidence.sharedWith.find(
-      (share) => share.userId?.toString() === policeId
+      (share) => share.userId?.toString() === policeId,
     );
 
     if (!alreadyShared) {
@@ -727,7 +696,7 @@ const shareEvidence = async (req, res) => {
         canForward,
         sharedBy: req.user?.name || "Hotel Staff",
       },
-      req
+      req,
     );
 
     res.json({
