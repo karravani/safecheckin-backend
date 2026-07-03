@@ -75,7 +75,7 @@ app.use(
 app.use(
   "/api/agent",
   createProxyMiddleware({
-    target: "http://localhost:8000",
+    target: `${process.env.AI_API_URL}`,
     changeOrigin: true,
     pathRewrite: { "^/api/agent": "" },
     on: {

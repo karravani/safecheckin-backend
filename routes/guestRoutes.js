@@ -25,8 +25,11 @@ const {
   getPhoto,
   getPhotoByPath,
 } = require("../controllers/guestController");
+const { serveGuestPhoto } = require("../controllers/guestPhotoController");
 
 const { auth } = require("../middleware/auth");
+
+router.get("/photo/:guestId/:photoType", serveGuestPhoto);
 
 router.use(auth);
 
